@@ -8,7 +8,7 @@ if not os.path.exists(res_dbase):
     os.mkdir(res_dbase)
 
 samp_i, n_samp = 0, 5
-shrink_factor = 3
+shrink_factor = 5
 for fname in os.listdir(inp_dbase):
     img = Image.open(inp_dbase + fname)
     img.save(res_dbase + fname)

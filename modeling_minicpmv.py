@@ -3,6 +3,7 @@ from typing import List, Optional
 
 import timm
 import torch
+import torch.nn.functional as F
 import torchvision
 from timm.data import IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
 from torchvision import transforms
@@ -28,6 +29,9 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
         self.resampler = self.init_resampler(self.embed_dim ,self.vision_dim)
         self.transform = self.init_transform()
 
+        self.plaus_hp = 0.1
+        self.txt_hp = 0.5
+        self.img_hp = 0.5
 
     def init_vision_module(self):
         model = timm.create_model(
@@ -372,13 +376,13 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
         post_prompt = '\n<AI>'
         if tgt_lang == 'en':
             prompts = {
-                'both': pre_prompt + f'Here is the Chinese caption of the image: {src_text}\nDescribe the image in English.' + post_prompt,
+                'exp': pre_prompt + f'Here is the Chinese caption of the image: {src_text}\nDescribe the image in English.' + post_prompt,
                 'txt': pre_prompt + f'Translate this to English: {src_text}' + post_prompt,
                 'img': pre_prompt + f'Describe the image.' + post_prompt
             }
         elif tgt_lang == 'zh':
             prompts = {
-                'both': pre_prompt + f'这是图像的英文说明：{src_text}\n用中文描述这幅图像。' + post_prompt,
+                'exp': pre_prompt + f'这是图像的英文说明：{src_text}\n用中文描述这幅图像。' + post_prompt,
                 'txt': pre_prompt + f'翻译成中文：{src_text}' + post_prompt,
                 'img': pre_prompt + f'描述这幅图像。' + post_prompt
             }
@@ -386,9 +390,11 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
 
         with torch.inference_mode():
             gen_ids = []
+
             for _ in range(1000):
-                res_both, scores_both = self.Generate(
-                    data_list=[prompts['both'] + tokenizer.decode(gen_ids)],
+                # exp
+                res_exp, scores_exp = self.Generate(
+                    data_list=[prompts['exp'] + tokenizer.decode(gen_ids)],
                     max_inp_length=2048,
                     img_list=[[image]],
                     tokenizer=tokenizer,
@@ -396,34 +402,51 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                     vision_hidden_states=None,
                     return_vision_hidden_states=False
                 )
-                if len(res_both[0]) == 0: break
-                gen_ids.extend(res_both[0])
+                if len(res_exp[0]) == 0:
+                    break
+                probs_exp = torch.softmax(scores_exp[0], dim=0)
+                max_prob = probs_exp.max().item()
+                logprobs_exp = F.log_softmax(scores_exp[0], dim=0)
+                logprobs_exp[probs_exp < max_prob * self.plaus_hp] = float('-inf')
+
+                # txt
+                res_txt, scores_txt = self.Generate(
+                    data_list=[prompts['txt'] + tokenizer.decode(gen_ids)],
+                    max_inp_length=2048,
+                    img_list=None,
+                    tokenizer=tokenizer,
+                    max_new_tokens=1,
+                    vision_hidden_states=None,
+                    return_vision_hidden_states=False
+                )
+                if len(res_txt[0]) == 0:
+                    logprobs_txt = torch.zeros_like(logprobs_exp)
+                else:
+                    logprobs_txt = F.log_softmax(scores_txt[0], dim=0)
+
+                # img
+                res_img, scores_img = self.Generate(
+                    data_list=[prompts['img'] + tokenizer.decode(gen_ids)],
+                    max_inp_length=2048,
+                    img_list=[[image]],
+                    tokenizer=tokenizer,
+                    max_new_tokens=1,
+                    vision_hidden_states=None,
+                    return_vision_hidden_states=False
+                )
+                if len(res_img[0]) == 0:
+                    logprobs_img = torch.zeros_like(logprobs_exp)
+                else:
+                    logprobs_img = F.log_softmax(scores_img[0], dim=0)
+
+                # combine
+                logprobs = logprobs_exp - self.txt_hp * logprobs_txt - self.img_hp * logprobs_img
+                argmax_id = torch.argmax(logprobs)
+                gen_ids.extend(argmax_id)
+
             print(tokenizer.decode(gen_ids))
-            print(_)
+            print('length', _)
 
-            """
-            res_txt, scores_txt = self.Generate(
-                data_list=[prompts['txt']],
-                max_inp_length=2048,
-                img_list=None,
-                tokenizer=tokenizer,
-                max_new_tokens=1000,
-                vision_hidden_states=None,
-                return_vision_hidden_states=False
-            )
-            print('txt:', res_txt[0])
-
-            res_img, scores_img = self.Generate(
-                data_list=[prompts['img']],
-                max_inp_length=2048,
-                img_list=[[image]],
-                tokenizer=tokenizer,
-                max_new_tokens=1000,
-                vision_hidden_states=None,
-                return_vision_hidden_states=False
-            )
-            print('img:', res_img[0])
-            """
         """
         answer = res[0]
         context = msgs
