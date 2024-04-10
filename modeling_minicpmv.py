@@ -30,8 +30,9 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
         self.transform = self.init_transform()
 
         self.plaus_hp = 0.1
-        self.txt_hp = 0.5
-        self.img_hp = 0.5
+        # self.txt_hp = 0.5
+        # self.img_hp = 0.5
+        # print('plaus_hp', self.plaus_hp, 'txt_hp', self.txt_hp, 'img_hp', self.img_hp)
 
     def init_vision_module(self):
         model = timm.create_model(
@@ -354,24 +355,9 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
 
         return answer, context, generation_config
 
-    def Chat(self, image, src_text, tokenizer, tgt_lang='en', **kwargs):
-        """
-        if isinstance(msgs, str):
-            msgs = json.loads(msgs)
-        # msgs to prompt
-        prompt = ''
-        for i, msg in enumerate(msgs):
-            role = msg['role']
-            content = msg['content']
-            assert role in ['user', 'assistant']
-            if i == 0:
-                assert role == 'user', 'The role of first msg should be user'
-                content = tokenizer.im_start + tokenizer.unk_token * self.config.query_num + tokenizer.im_end + '\n' + content
-            prompt += '<用户>' if role=='user' else '<AI>'
-            prompt += content
-        prompt += '<AI>'
-        final_input = prompt
-        """
+    def Chat(self, image, src_text, tokenizer, tgt_lang='en', txt_hp=0.5, img_hp=0.5, **kwargs):
+        print('txt_hp', txt_hp, 'img_hp', img_hp)
+
         pre_prompt = tokenizer.im_start + tokenizer.unk_token * self.config.query_num + tokenizer.im_end + '\n<用户>'
         post_prompt = '\n<AI>'
         if tgt_lang == 'en':
@@ -404,9 +390,9 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                 )
                 if len(res_exp[0]) == 0:
                     break
-                probs_exp = torch.softmax(scores_exp[0], dim=0)
-                max_prob = probs_exp.max().item()
-                logprobs_exp = F.log_softmax(scores_exp[0], dim=0)
+                probs_exp = torch.softmax(scores_exp[0][0], dim=0)
+                max_prob = probs_exp.max()
+                logprobs_exp = F.log_softmax(scores_exp[0][0], dim=0)
                 logprobs_exp[probs_exp < max_prob * self.plaus_hp] = float('-inf')
 
                 # txt
@@ -422,7 +408,7 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                 if len(res_txt[0]) == 0:
                     logprobs_txt = torch.zeros_like(logprobs_exp)
                 else:
-                    logprobs_txt = F.log_softmax(scores_txt[0], dim=0)
+                    logprobs_txt = F.log_softmax(scores_txt[0][0], dim=0)
 
                 # img
                 res_img, scores_img = self.Generate(
@@ -437,15 +423,16 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                 if len(res_img[0]) == 0:
                     logprobs_img = torch.zeros_like(logprobs_exp)
                 else:
-                    logprobs_img = F.log_softmax(scores_img[0], dim=0)
+                    logprobs_img = F.log_softmax(scores_img[0][0], dim=0)
 
                 # combine
-                logprobs = logprobs_exp - self.txt_hp * logprobs_txt - self.img_hp * logprobs_img
+                logprobs = logprobs_exp - txt_hp * logprobs_txt - img_hp * logprobs_img
                 argmax_id = torch.argmax(logprobs)
-                gen_ids.extend(argmax_id)
+                gen_ids.append(argmax_id)
 
-            print(tokenizer.decode(gen_ids))
-            print('length', _)
+            # print(tokenizer.decode(gen_ids))
+            # print('length', _)
+            return tokenizer.decode(gen_ids)
 
         """
         answer = res[0]
