@@ -1,5 +1,6 @@
 import math
 from typing import List, Optional
+import json
 
 import timm
 import torch
@@ -210,11 +211,11 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
 
     def _Decode_text(self, result_ids, tokenizer):
         result_ids_ = []
-        for i, result in enumerate(result_ids):
+        for result in result_ids:
             result = result[result != 0]
-            if result[0] == tokenizer.bos_id:
+            if result.shape[0] > 0 and result[0] == tokenizer.bos_id:
                 result = result[1:]
-            if result[-1] == tokenizer.eos_id:
+            if result.shape[0] > 0 and result[-1] == tokenizer.eos_id:
                 result = result[:-1]
             result_ids_.append(result)
         return result_ids_
@@ -301,8 +302,7 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
             result, scores = self._Decode(model_inputs['inputs_embeds'], tokenizer, **kwargs)
 
         if return_vision_hidden_states:
-            assert(False)
-            return result, vision_hidden_states
+            return result, scores, vision_hidden_states
 
         return result, scores
 
@@ -355,22 +355,27 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
 
         return answer, context, generation_config
 
-    def Chat(self, image, src_text, tokenizer, tgt_lang='en', txt_hp=0.5, img_hp=0.5, **kwargs):
+    def Chat(self, image, src_text, tokenizer, tgt_lang='en', txt_hp=0.0, img_hp=0.0, vision_hidden_states=None, **kwargs):
         print('txt_hp', txt_hp, 'img_hp', img_hp)
 
         pre_prompt = tokenizer.im_start + tokenizer.unk_token * self.config.query_num + tokenizer.im_end + '\n<用户>'
         post_prompt = '\n<AI>'
         if tgt_lang == 'en':
             prompts = {
-                'exp': pre_prompt + f'Here is the Chinese caption of the image: {src_text}\nDescribe the image in English.' + post_prompt,
+                # 'exp': pre_prompt + f'Here is the Chinese caption of the image: {src_text}\nDescribe the image in English.' + post_prompt,
+                'exp': pre_prompt + f'Here is the Chinese caption of the image: {src_text}\nDescribe the image in 1 sentence in English.' + post_prompt,
                 'txt': pre_prompt + f'Translate this to English: {src_text}' + post_prompt,
-                'img': pre_prompt + f'Describe the image.' + post_prompt
+                # 'txt': pre_prompt + f'Translate this to English in 1 sentence: {src_text}' + post_prompt,
+                # 'img': pre_prompt + f'Describe the image.' + post_prompt
+                'img': pre_prompt + f'Describe the image in 1 sentence.' + post_prompt
             }
         elif tgt_lang == 'zh':
             prompts = {
-                'exp': pre_prompt + f'这是图像的英文说明：{src_text}\n用中文描述这幅图像。' + post_prompt,
+                # 'exp': pre_prompt + f'这是图像的英文说明：{src_text}\n用中文描述这幅图像。' + post_prompt,
+                'exp': pre_prompt + f'这是图像的英文说明：{src_text}\n用1句话中文描述这幅图像。' + post_prompt,
                 'txt': pre_prompt + f'翻译成中文：{src_text}' + post_prompt,
-                'img': pre_prompt + f'描述这幅图像。' + post_prompt
+                # 'img': pre_prompt + f'描述这幅图像。' + post_prompt
+                'img': pre_prompt + f'用1句话描述这幅图像。' + post_prompt
             }
         else: assert(False)
 
@@ -379,14 +384,14 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
 
             for _ in range(1000):
                 # exp
-                res_exp, scores_exp = self.Generate(
+                res_exp, scores_exp, vision_hidden_states = self.Generate(
                     data_list=[prompts['exp'] + tokenizer.decode(gen_ids)],
                     max_inp_length=2048,
                     img_list=[[image]],
                     tokenizer=tokenizer,
                     max_new_tokens=1,
-                    vision_hidden_states=None,
-                    return_vision_hidden_states=False
+                    vision_hidden_states=vision_hidden_states,
+                    return_vision_hidden_states=True
                 )
                 if len(res_exp[0]) == 0:
                     break
@@ -395,6 +400,7 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                 logprobs_exp = F.log_softmax(scores_exp[0][0], dim=0)
                 logprobs_exp[probs_exp < max_prob * self.plaus_hp] = float('-inf')
 
+                # """
                 # txt
                 res_txt, scores_txt = self.Generate(
                     data_list=[prompts['txt'] + tokenizer.decode(gen_ids)],
@@ -409,7 +415,9 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                     logprobs_txt = torch.zeros_like(logprobs_exp)
                 else:
                     logprobs_txt = F.log_softmax(scores_txt[0][0], dim=0)
+                # """
 
+                """
                 # img
                 res_img, scores_img = self.Generate(
                     data_list=[prompts['img'] + tokenizer.decode(gen_ids)],
@@ -417,22 +425,23 @@ class MiniCPMV(MiniCPMVPreTrainedModel):
                     img_list=[[image]],
                     tokenizer=tokenizer,
                     max_new_tokens=1,
-                    vision_hidden_states=None,
+                    vision_hidden_states=vision_hidden_states,
                     return_vision_hidden_states=False
                 )
                 if len(res_img[0]) == 0:
                     logprobs_img = torch.zeros_like(logprobs_exp)
                 else:
                     logprobs_img = F.log_softmax(scores_img[0][0], dim=0)
+                """
 
                 # combine
-                logprobs = logprobs_exp - txt_hp * logprobs_txt - img_hp * logprobs_img
+                # logprobs = logprobs_exp - txt_hp * logprobs_txt - img_hp * logprobs_img
+                logprobs = logprobs_exp - txt_hp * logprobs_txt
+                # logprobs = logprobs_exp - img_hp * logprobs_img
                 argmax_id = torch.argmax(logprobs)
                 gen_ids.append(argmax_id)
 
-            # print(tokenizer.decode(gen_ids))
-            # print('length', _)
-            return tokenizer.decode(gen_ids)
+            return tokenizer.decode(gen_ids), vision_hidden_states
 
         """
         answer = res[0]
