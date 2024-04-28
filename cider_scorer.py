@@ -6,44 +6,47 @@ import copy
 from collections import defaultdict
 import numpy as np
 import math
-
-def precook(s, n=4, out=False):
-    """
-    Takes a string as input and returns an object that can be given to
-    either cook_refs or cook_test. This is optional: cook_refs and cook_test
-    can take string arguments as well.
-    :param s: string : sentence to be converted into ngrams
-    :param n: int    : number of ngrams for which representation is calculated
-    :return: term frequency vector for occuring ngrams
-    """
-    words = s.split()
-    counts = defaultdict(int)
-    for k in range(1,n+1):
-        for i in range(len(words)-k+1):
-            ngram = tuple(words[i:i+k])
-            counts[ngram] += 1
-    return counts
-
-def cook_refs(refs, n=4): ## lhuang: oracle will call with "average"
-    '''Takes a list of reference sentences for a single segment
-    and returns an object that encapsulates everything that BLEU
-    needs to know about them.
-    :param refs: list of string : reference sentences for some image
-    :param n: int : number of ngrams for which (ngram) representation is calculated
-    :return: result (list of dict)
-    '''
-    return [precook(ref, n) for ref in refs]
-
-def cook_test(test, n=4):
-    '''Takes a test sentence and returns an object that
-    encapsulates everything that BLEU needs to know about it.
-    :param test: list of string : hypothesis sentence for some image
-    :param n: int : number of ngrams for which (ngram) representation is calculated
-    :return: result (dict)
-    '''
-    return precook(test, n, True)
+import jieba
 
 class CiderScorer(object):
+    # moved cook stuff inside the class
+
+    def precook(self, s, n=4, out=False):
+        """
+        Takes a string as input and returns an object that can be given to
+        either cook_refs or cook_test. This is optional: cook_refs and cook_test
+        can take string arguments as well.
+        :param s: string : sentence to be converted into ngrams
+        :param n: int    : number of ngrams for which representation is calculated
+        :return: term frequency vector for occuring ngrams
+        """
+        words = s.split() if self.lang == 'en' else list(jieba.cut(s))
+        # words = s.split() if self.lang == 'en' else list(s)
+        counts = defaultdict(int)
+        for k in range(1,n+1):
+            for i in range(len(words)-k+1):
+                ngram = tuple(words[i:i+k])
+                counts[ngram] += 1
+        return counts
+
+    def cook_refs(self, refs, n=4): ## lhuang: oracle will call with "average"
+        '''Takes a list of reference sentences for a single segment
+        and returns an object that encapsulates everything that BLEU
+        needs to know about them.
+        :param refs: list of string : reference sentences for some image
+        :param n: int : number of ngrams for which (ngram) representation is calculated
+        :return: result (list of dict)
+        '''
+        return [self.precook(ref, n) for ref in refs]
+
+    def cook_test(self, test, n=4):
+        '''Takes a test sentence and returns an object that
+        encapsulates everything that BLEU needs to know about it.
+        :param test: list of string : hypothesis sentence for some image
+        :param n: int : number of ngrams for which (ngram) representation is calculated
+        :return: result (dict)
+        '''
+        return self.precook(test, n, True)
     """CIDEr scorer.
     """
 
@@ -54,10 +57,11 @@ class CiderScorer(object):
         new.crefs = copy.copy(self.crefs)
         return new
 
-    def __init__(self, test=None, refs=None, n=4, sigma=6.0):
+    def __init__(self, test=None, refs=None, n=4, sigma=6.0, lang='en'):
         ''' singular instance '''
         self.n = n
         self.sigma = sigma
+        self.lang = lang
         self.crefs = []
         self.ctest = []
         self.document_frequency = defaultdict(float)
@@ -68,9 +72,9 @@ class CiderScorer(object):
         '''called by constructor and __iadd__ to avoid creating new instances.'''
 
         if refs is not None:
-            self.crefs.append(cook_refs(refs))
+            self.crefs.append(self.cook_refs(refs))
             if test is not None:
-                self.ctest.append(cook_test(test)) ## N.B.: -1
+                self.ctest.append(self.cook_test(test)) ## N.B.: -1
             else:
                 self.ctest.append(None) # lens of crefs and ctest have to match
 

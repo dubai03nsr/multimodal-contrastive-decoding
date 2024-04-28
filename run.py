@@ -4,6 +4,7 @@ from transformers import AutoModel, AutoTokenizer
 import pandas as pd
 import os
 import pickle
+import random
 
 # load model
 print('cuda available', torch.cuda.is_available())
@@ -21,28 +22,38 @@ dire = 'shrunk-5/'
 dirs = [('en', 'zh'), ('zh', 'en')]
 n_dir = len(dirs)
 # direction -> {hp_i -> {img_id -> res}}
-res = {d: {hp_i: {} for hp_i in range(11)} for d in dirs}
+n_hp = 10
+res = {d: {hp_i: {} for hp_i in range(n_hp)} for d in dirs}
+
+# sample 100 files from dire
+fnames = os.listdir(dire)
+random.seed(17)
+random.shuffle(fnames)
+sample_fnames = fnames[:100]
 
 # run
-for fname in os.listdir(dire):
+# for fname in os.listdir(dire):
+for fname in sample_fnames:
     image = Image.open(dire + fname).convert('RGB')
     img_id = fname[:-4]
+    vision_hidden_states = None
 
     for dirn in dirs:
         src_lang, tgt_lang = dirn
         src_text = get_caption(img_id, src_lang)
 
-        for hp_i in range(11):
-            hp = hp_i * 0.1
-            res_run = model.Chat(
+        for hp_i in range(n_hp):
+            hp = hp_i * 0.01
+            res_run, vision_hidden_states = model.Chat(
                 image=image,
                 src_text=src_text,
                 tokenizer=tokenizer,
                 tgt_lang=tgt_lang,
                 txt_hp=hp,
-                img_hp=hp
+                img_hp=hp,
+                vision_hidden_states=vision_hidden_states
             )
             res[dirn][hp_i][img_id] = res_run
 
-with open('save/run.pkl', 'wb') as f:
+with open('save/run6.pkl', 'wb') as f:
     pickle.dump(res, f)
